@@ -912,6 +912,13 @@ public final class ViewRootImpl implements ViewParent,
     private BLASTBufferQueue mBlastBufferQueue;
     private IBinder mBbqApplyToken = new Binder();
 
+    /**
+     * Registration for SurfaceFlinger's jank classification on this window's surface. Used to arm
+     * buffer stuffing recovery from the composer verdict. Only non-null when buffer stuffing
+     * recovery is enabled and a surface exists.
+     */
+    private SurfaceControl.OnJankDataListenerRegistration mJankDataListenerRegistration;
+
     private final HdrRenderState mHdrRenderState = new HdrRenderState(this);
 
     /**
@@ -3093,6 +3100,35 @@ public final class ViewRootImpl implements ViewParent,
 
         // Since the SurfaceControl is a VRI, indicate that it can recover from buffer stuffing.
         mTransaction.setRecoverableFromBufferStuffing(mSurfaceControl).applyAsyncUnsafe();
+
+        // The jank listener is bound to the native SurfaceControl, so it has to be recreated
+        // whenever the surface changes.
+        registerSurfaceFlingerJankListener();
+    }
+
+    /**
+     * Registers a listener that forwards SurfaceFlinger's per-frame jank classification to the
+     * Choreographer, which uses consecutive buffer stuffing frames to arm buffer stuffing
+     * recovery. The listener is created from a binder thread, so the Choreographer entry point
+     * must be thread safe.
+     */
+    private void registerSurfaceFlingerJankListener() {
+        if (mJankDataListenerRegistration != null) {
+            mJankDataListenerRegistration.release();
+        }
+        mJankDataListenerRegistration = mSurfaceControl.addOnJankDataListener(jankData -> {
+            for (int i = 0; i < jankData.size(); i++) {
+                final SurfaceControl.JankData data = jankData.get(i);
+                mChoreographer.onSurfaceFlingerJank(data.getJankType(), data.getVsyncId());
+            }
+        });
+    }
+
+    private void removeSurfaceFlingerJankListener() {
+        if (mJankDataListenerRegistration != null) {
+            mJankDataListenerRegistration.release();
+            mJankDataListenerRegistration = null;
+        }
     }
 
     private void setBoundsLayerCrop(Transaction t) {
@@ -3150,6 +3186,7 @@ public final class ViewRootImpl implements ViewParent,
             mBoundsLayer.release();
             mBoundsLayer = null;
         }
+        removeSurfaceFlingerJankListener();
         mRenderTargetIsValid = false;
         mSurface.release();
         mSurfaceControl.release();

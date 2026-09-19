@@ -47,6 +47,7 @@ import com.android.internal.annotations.VisibleForTesting;
 import java.io.PrintWriter;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Coordinates the timing of animations, input and drawing.
@@ -281,6 +282,12 @@ public final class Choreographer {
 
     private final BufferStuffingState mBufferStuffingState = new BufferStuffingState();
 
+    // Number of consecutive frames SurfaceFlinger classified as buffer stuffing. Updated from a
+    // binder thread, so this must be atomic. A single stuffed frame can be a scheduling artifact,
+    // so recovery only starts after two in a row.
+    private final AtomicInteger mSurfaceFlingerBufferStuffingFrames = new AtomicInteger(0);
+    private static final int SURFACE_FLINGER_BUFFER_STUFFING_FRAMES = 2;
+
     /**
      * Set flag to indicate that client is blocked waiting for buffer release and
      * buffer stuffing recovery should soon begin. This is provided with the
@@ -289,6 +296,44 @@ public final class Choreographer {
      */
     public void onWaitForBufferRelease(long durationNanos) {
         if (durationNanos > mLastFrameIntervalNanos / 2) {
+            mBufferStuffingState.isStuffed.set(true);
+        }
+    }
+
+    /**
+     * Provides SurfaceFlinger's jank classification for a frame produced by this Choreographer.
+     * <p>
+     * Normally buffer stuffing recovery is armed when RenderThread is blocked in
+     * {@code BLASTBufferQueue::dequeueBuffer}. If the client has spare buffers that never happens,
+     * even though SurfaceFlinger can still classify the frame as buffer stuffing. Consecutive
+     * buffer stuffing verdicts are therefore used as an alternative trigger to arm the same
+     * recovery.
+     * <p>
+     * Called from a binder thread, so this must only touch thread-safe state.
+     *
+     * @param jankType     the bitmask of SurfaceFlinger jank classifications for the frame
+     * @param frameVsyncId the vsync id of the frame being classified
+     *
+     * @hide
+     */
+    public void onSurfaceFlingerJank(int jankType, long frameVsyncId) {
+        if ((jankType & SurfaceControl.JankData.JANK_BUFFER_STUFFING) == 0) {
+            // Any frame SurfaceFlinger did not classify as buffer stuffing ends the run.
+            mSurfaceFlingerBufferStuffingFrames.set(0);
+            return;
+        }
+        if (mBufferStuffingState.isStuffed.get()) {
+            // Recovery was already armed, for example by the blocked-dequeue path, so this is a
+            // no-op.
+            return;
+        }
+        if (mSurfaceFlingerBufferStuffingFrames.incrementAndGet()
+                >= SURFACE_FLINGER_BUFFER_STUFFING_FRAMES) {
+            // The frame was presented one vsync later than expected, so the app is now producing
+            // buffers a vsync ahead of SurfaceFlinger for the rest of the animation. Arm the same
+            // recovery the blocked-dequeue path uses so the animation timeline is delayed by one
+            // frame.
+            mSurfaceFlingerBufferStuffingFrames.set(0);
             mBufferStuffingState.isStuffed.set(true);
         }
     }

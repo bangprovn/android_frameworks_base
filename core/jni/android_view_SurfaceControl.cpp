@@ -2474,6 +2474,7 @@ public:
         constexpr int JANK_COMPOSER = 0x1;    // SurfaceControl.JankData.JANK_COMPOSER
         constexpr int JANK_APPLICATION = 0x2; // SurfaceControl.JankData.JANK_APPLICATION
         constexpr int JANK_OTHER = 0x4;       // SurfaceControl.JankData.JANK_OTHER
+        constexpr int JANK_BUFFER_STUFFING = 0x8; // SurfaceControl.JankData.JANK_BUFFER_STUFFING
 
         constexpr int kComposerJankMask = JankType::DisplayHAL |
                 JankType::SurfaceFlingerCpuDeadlineMissed |
@@ -2483,13 +2484,18 @@ public:
         constexpr int kApplicationJankMask =
                 JankType::AppDeadlineMissed | JankType::AppResyncedJitter;
 
-        constexpr int kNoneReportedJankMask = JankType::None | JankType::BufferStuffing |
-                JankType::SurfaceFlingerStuffing | JankType::Dropped | JankType::NonAnimating |
-                JankType::DisplayNotOn | JankType::DisplayModeChangeInProgress |
+        // Buffer stuffing is tracked by the client and can be recovered from, so expose it as its
+        // own bit instead of folding it into the "other" bucket.
+        constexpr int kBufferStuffingJankMask =
+                JankType::BufferStuffing | JankType::SurfaceFlingerStuffing;
+
+        constexpr int kNoneReportedJankMask = JankType::None | JankType::Dropped |
+                JankType::NonAnimating | JankType::DisplayNotOn |
+                JankType::DisplayModeChangeInProgress |
                 JankType::DisplayPowerModeChangeInProgress;
 
-        constexpr int kAllHandledJankMask =
-                kComposerJankMask | kApplicationJankMask | kNoneReportedJankMask;
+        constexpr int kAllHandledJankMask = kComposerJankMask | kApplicationJankMask |
+                kBufferStuffingJankMask | kNoneReportedJankMask;
 
         static_assert((kJankTypeAll & ~(kAllHandledJankMask | JankType::Unknown)) == 0,
                       "Missing a JankType handling");
@@ -2501,6 +2507,10 @@ public:
 
         if (sfJankType & kApplicationJankMask) {
             javaJankType |= JANK_APPLICATION;
+        }
+
+        if (sfJankType & kBufferStuffingJankMask) {
+            javaJankType |= JANK_BUFFER_STUFFING;
         }
 
         if (sfJankType & ~kAllHandledJankMask) {

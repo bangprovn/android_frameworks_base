@@ -531,6 +531,7 @@ public final class SurfaceControl implements Parcelable {
             JANK_COMPOSER,
             JANK_APPLICATION,
             JANK_OTHER,
+            JANK_BUFFER_STUFFING,
         })
         @Retention(RetentionPolicy.SOURCE)
         public @interface JankType {}
@@ -554,6 +555,15 @@ public final class SurfaceControl implements Parcelable {
          * Bitmask for jank due to deadlines missed by other system components.
          */
         public static final int JANK_OTHER = 1 << 2;
+
+        /**
+         * Bitmask for jank where a frame's buffer was expected to be presented on one vsync but
+         * ended up being presented on the next one, usually because the previous frame ran long.
+         * This is SurfaceFlinger's buffer stuffing classification and is used to trigger buffer
+         * stuffing recovery even when the client never blocked waiting for a buffer.
+         * @hide
+         */
+        public static final int JANK_BUFFER_STUFFING = 1 << 3;
 
         private final long mFrameVsyncId;
         private final @JankType int mJankTypeLegacy;
