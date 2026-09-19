@@ -206,10 +206,16 @@ final class HalVibration extends Vibration {
         int segmentCount = composed.getSegments().size();
         for (int i = 0; i < segmentCount; i++) {
             VibrationEffectSegment segment = composed.getSegments().get(i);
-            if ((segment instanceof PrebakedSegment prebaked) && prebaked.shouldFallback()) {
+            if ((segment instanceof PrebakedSegment prebaked) && prebaked.shouldFallback()
+                    && mFallbacks.get(prebaked.getEffectId()) == null) {
                 VibrationEffect fallback = fallbackProvider.apply(prebaked.getEffectId());
                 if (fallback != null) {
                     mFallbacks.put(prebaked.getEffectId(), fallback);
+                    // A fallback can itself be a prebaked effect: EFFECT_TEXTURE_TICK falls back
+                    // to EFFECT_TICK.  Resolve the whole chain here, so that a vibrator which
+                    // supports neither of them can still reach the waveform at the end of it.
+                    // The guard above keeps this terminating if the table ever becomes cyclic.
+                    fillFallbacksForEffect(fallback, fallbackProvider);
                 }
             }
         }

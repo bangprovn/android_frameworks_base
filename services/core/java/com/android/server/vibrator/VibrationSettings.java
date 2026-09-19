@@ -800,8 +800,11 @@ final class VibrationSettings {
         effects.put(VibrationEffect.EFFECT_DOUBLE_CLICK, doubleClickEffect);
         effects.put(VibrationEffect.EFFECT_TICK, tickEffect);
         effects.put(VibrationEffect.EFFECT_HEAVY_CLICK, heavyClickEffect);
+        // Keep the fallback flag set: on a device whose vibrator supports no prebaked effect
+        // at all, this substitution must be able to fall back once more onto tickEffect,
+        // otherwise EFFECT_TEXTURE_TICK resolves to an effect that can never be played.
         effects.put(VibrationEffect.EFFECT_TEXTURE_TICK,
-                VibrationEffect.get(VibrationEffect.EFFECT_TICK, false));
+                VibrationEffect.get(VibrationEffect.EFFECT_TICK, true));
 
         return effects;
     }

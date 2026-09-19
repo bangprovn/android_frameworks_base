@@ -28,6 +28,7 @@ import android.os.RemoteCallbackList;
 import android.os.RemoteException;
 import android.os.Trace;
 import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.os.VibratorInfo;
 import android.os.vibrator.PrebakedSegment;
 import android.os.vibrator.PrimitiveSegment;
@@ -274,6 +275,14 @@ final class VibratorController implements HalVibrator {
     public long on(long vibrationId, long stepId, PrebakedSegment prebaked) {
         Trace.traceBegin(TRACE_TAG_VIBRATOR, "HalVibrator.onPrebaked");
         try {
+            if (mVibratorInfo.isEffectSupported(prebaked.getEffectId())
+                    == Vibrator.VIBRATION_EFFECT_SUPPORT_NO) {
+                // Never ask the HAL to perform an effect it has already told us it cannot play.
+                // Some HALs answer perform() with a duration anyway and then stay silent, which
+                // makes the caller believe the effect played and skip the waveform fallback.
+                // Reporting 0 here is what that fallback is keyed on.
+                return 0;
+            }
             synchronized (mLock) {
                 long duration = mNativeWrapper.perform(prebaked.getEffectId(),
                         prebaked.getEffectStrength(), vibrationId, stepId);
