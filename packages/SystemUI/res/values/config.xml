@@ -714,6 +714,40 @@
          when the device supports an under-display fingerprint sensor -->
     <integer name="config_udfpsDeviceEntryIconLongPress" translatable="false">100</integer>
 
+    <!-- Sysfs node that switches the panel's local high-brightness mode (LHBM) on and off for the
+         under-display fingerprint sensor. On such a panel the illumination of the finger is done by
+         the display controller, not by the framework drawing a bright circle, so the node has to be
+         written between the pointer-down that reaches the fingerprint HAL and UDFPS_UI_READY.
+         Empty (the default) leaves UDFPS display handling entirely to the platform. -->
+    <string name="config_udfpsLocalHbmControlPath" translatable="false"></string>
+
+    <!-- Values written to config_udfpsLocalHbmControlPath, as ASCII and without a trailing
+         newline. The off value is also what is reported to config_udfpsLocalHbmAuthResultPath. -->
+    <string name="config_udfpsLocalHbmOnValue" translatable="false">1</string>
+    <string name="config_udfpsLocalHbmOffValue" translatable="false">0</string>
+
+    <!-- Node read back after the control node was written, to log whether the panel accepted the
+         command. Empty to skip the read. -->
+    <string name="config_udfpsLocalHbmStatusPath" translatable="false"></string>
+    <!-- Value config_udfpsLocalHbmStatusPath is expected to read once LHBM is on. Empty to log
+         whatever it reads without judging it. -->
+    <string name="config_udfpsLocalHbmStatusReadyValue" translatable="false"></string>
+
+    <!-- Node that takes the authentication result just before LHBM is switched off. Empty to
+         skip. -->
+    <string name="config_udfpsLocalHbmAuthResultPath" translatable="false"></string>
+
+    <!-- Node reporting the panel power mode. While the display is dozing, it is polled until it
+         reads one of config_udfpsLocalHbmPanelPowerModeReadyValues before the control node is
+         written, because the panel rejects the write until it is out of its low-power state.
+         Empty to write the control node immediately. -->
+    <string name="config_udfpsLocalHbmPanelPowerModePath" translatable="false"></string>
+    <string-array name="config_udfpsLocalHbmPanelPowerModeReadyValues" translatable="false" />
+    <!-- Touch driver node switched "1" while a fingerprint client is listening (the UDFPS
+         overlay is shown) and "0" when it stops, so the touch controller keeps reporting a
+         finger held on the sensor instead of a series of short presses. Empty to skip. -->
+    <string name="config_udfpsLocalHbmTouchFodPath" translatable="false"></string>
+
     <!-- package name of a built-in camera app to use to restrict implicit intent resolution
          when the double-press power gesture is used. Ignored if empty. -->
     <string translatable="false" name="config_cameraGesturePackage"></string>

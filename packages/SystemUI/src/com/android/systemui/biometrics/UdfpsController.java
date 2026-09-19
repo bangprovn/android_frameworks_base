@@ -377,7 +377,18 @@ public class UdfpsController implements DozeReceiver, Dumpable {
                     }
                     mAcquiredReceived = true;
                     final View view = mOverlay.getTouchOverlay();
-                    unconfigureDisplay(view);
+                    if (mUdfpsDisplayMode instanceof UdfpsLocalHbmDisplayMode) {
+                        // A panel lit through a sysfs node stays lit until finger-up, the
+                        // result, or the overlay going away - as on the stock framework, which
+                        // never reacts to acquired messages. The Goodix HAL reports a vendor
+                        // acquired code the moment it starts capturing; dropping the light on
+                        // it (AOSP's rule for every acquired code but START) darkened the
+                        // sensor mid-exposure and every capture failed preprocessing.
+                        Log.v(TAG, "onAcquired | keeping local HBM, acquiredInfo="
+                                + acquiredInfo);
+                    } else {
+                        unconfigureDisplay(view);
+                    }
                     tryAodSendFingerUp();
                 });
             }
@@ -872,6 +883,9 @@ public class UdfpsController implements DozeReceiver, Dumpable {
             mOnFingerDown = false;
             mAttemptedToDismissKeyguard = false;
             mOrientationListener.enable();
+            if (mUdfpsDisplayMode instanceof UdfpsLocalHbmDisplayMode localHbm) {
+                localHbm.onOverlayShown();
+            }
             if (mFingerprintManager != null) {
                 mFingerprintManager.onUdfpsUiEvent(FingerprintManager.UDFPS_UI_OVERLAY_SHOWN,
                         overlay.getRequestId(), mSensorProps.sensorId);
@@ -891,6 +905,9 @@ public class UdfpsController implements DozeReceiver, Dumpable {
                 onFingerUp(mOverlay.getRequestId(), oldView);
             }
             final boolean removed = mOverlay.hide();
+            if (mUdfpsDisplayMode instanceof UdfpsLocalHbmDisplayMode localHbm) {
+                localHbm.onOverlayHidden();
+            }
             mKeyguardViewManager.hideAlternateBouncer(
                     /* updateScrim */ true,
                     /* clearDismissAction */ false

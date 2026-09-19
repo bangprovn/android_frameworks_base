@@ -320,8 +320,14 @@ public class AuthController implements
                 }
             });
             mUdfpsController.setAuthControllerUpdateUdfpsLocation(this::updateUdfpsLocation);
-            mUdfpsController.setUdfpsDisplayMode(new UdfpsDisplayMode(mContext, mExecution,
-                    this, mUdfpsLogger.get()));
+            // On a panel whose local high-brightness mode is driven through a sysfs node, the
+            // platform display mode (a refresh rate vote only) is wrapped in the node control that
+            // actually illuminates the finger. Inert unless the device configures it.
+            mUdfpsController.setUdfpsDisplayMode(UdfpsLocalHbmDisplayMode.wrapIfConfigured(
+                    mContext,
+                    new UdfpsDisplayMode(mContext, mExecution, this, mUdfpsLogger.get()),
+                    mBackgroundExecutor,
+                    mContext.getMainExecutor()));
             mUdfpsBounds = mUdfpsProps.get(0).getLocation().getRect();
         }
         mSidefpsProps = !sidefpsProps.isEmpty() ? sidefpsProps : null;
