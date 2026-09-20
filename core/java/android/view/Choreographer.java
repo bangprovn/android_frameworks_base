@@ -249,8 +249,14 @@ public final class Choreographer {
         public AtomicBoolean isStuffed = new AtomicBoolean(false);
 
         // Whether buffer stuffing recovery has begun. Recovery can only end
-        // when events are idle.
-        public boolean isRecovering = false;
+        // when events are idle. Read from the binder thread, written on the main
+        // thread, so this must be volatile.
+        public volatile boolean isRecovering = false;
+
+        // The number of additional frame delays scheduled during the current recovery, beyond
+        // the first delay. Read from the binder thread, written on the main thread, so this
+        // must be volatile.
+        public volatile int extraFrameDelays = 0;
 
         // The number of additional frame delays scheduled during recovery to wait for the next
         // vsync. These are scheduled when frame times appear to go backward or frames are
@@ -271,6 +277,7 @@ public final class Choreographer {
         public void reset() {
             isStuffed.set(false);
             isRecovering = false;
+            extraFrameDelays = 0;
             numberWaitsForNextVsync = 0;
             accumulatedDelayNanos = 0;
         }
@@ -288,6 +295,23 @@ public final class Choreographer {
     private final AtomicInteger mSurfaceFlingerBufferStuffingFrames = new AtomicInteger(0);
     private static final int SURFACE_FLINGER_BUFFER_STUFFING_FRAMES = 2;
 
+    // The maximum number of additional frame delays scheduled per recovery, beyond the first
+    // delay. A queue that is two frames deep needs more than one delayed frame to drain, but the
+    // extra delays are capped so recovery costs at most MAX_EXTRA_FRAME_DELAYS + 1 dropped frames
+    // per animation.
+    private static final int MAX_EXTRA_FRAME_DELAYS = 2;
+
+    // SurfaceFlinger verdicts needed to delay again while recovery is already in progress. This is
+    // stricter than the initial threshold since the first delay should have already reduced the
+    // queued buffer count.
+    private static final int SURFACE_FLINGER_BUFFER_STUFFING_FRAMES_RECOVERING = 3;
+
+    // The highest vsync id for which a SurfaceFlinger jank verdict describes a frame produced
+    // before the last delayed frame. Such verdicts cannot indicate that the pipeline is still
+    // stuffed after that delay and are ignored. Written on the main thread, read from the binder
+    // thread, so this must be volatile. A value of -1 disables the check.
+    private volatile long mStuffingVerdictsIgnoredUpToVsyncId = -1;
+
     /**
      * Set flag to indicate that client is blocked waiting for buffer release and
      * buffer stuffing recovery should soon begin. This is provided with the
@@ -297,6 +321,7 @@ public final class Choreographer {
     public void onWaitForBufferRelease(long durationNanos) {
         if (durationNanos > mLastFrameIntervalNanos / 2) {
             mBufferStuffingState.isStuffed.set(true);
+            Trace.instant(Trace.TRACE_TAG_VIEW, "buffer stuffed (blocked on buffer release)");
         }
     }
 
@@ -309,6 +334,11 @@ public final class Choreographer {
      * buffer stuffing verdicts are therefore used as an alternative trigger to arm the same
      * recovery.
      * <p>
+     * While recovery is already in progress, a stricter run of consecutive buffer stuffing
+     * verdicts can arm an additional frame delay, up to {@link #MAX_EXTRA_FRAME_DELAYS} extra
+     * delays per recovery. Verdicts for frames produced before the last delayed frame are ignored,
+     * since they cannot show whether that delay drained the queue.
+     * <p>
      * Called from a binder thread, so this must only touch thread-safe state.
      *
      * @param jankType     the bitmask of SurfaceFlinger jank classifications for the frame
@@ -317,6 +347,11 @@ public final class Choreographer {
      * @hide
      */
     public void onSurfaceFlingerJank(int jankType, long frameVsyncId) {
+        if (frameVsyncId <= mStuffingVerdictsIgnoredUpToVsyncId) {
+            // This frame was produced before the last delayed frame, so it can't indicate that the
+            // pipeline is still stuffed after that delay.
+            return;
+        }
         if ((jankType & SurfaceControl.JankData.JANK_BUFFER_STUFFING) == 0) {
             // Any frame SurfaceFlinger did not classify as buffer stuffing ends the run.
             mSurfaceFlingerBufferStuffingFrames.set(0);
@@ -327,14 +362,24 @@ public final class Choreographer {
             // no-op.
             return;
         }
-        if (mSurfaceFlingerBufferStuffingFrames.incrementAndGet()
-                >= SURFACE_FLINGER_BUFFER_STUFFING_FRAMES) {
+        if (mBufferStuffingState.isRecovering
+                && mBufferStuffingState.extraFrameDelays >= MAX_EXTRA_FRAME_DELAYS) {
+            // Recovery has already used all of its allowed extra frame delays.
+            return;
+        }
+        // Recovery needs more consecutive stuffed frames to delay again, since the previous delay
+        // should have reduced the queued buffer count.
+        final int threshold = mBufferStuffingState.isRecovering
+                ? SURFACE_FLINGER_BUFFER_STUFFING_FRAMES_RECOVERING
+                : SURFACE_FLINGER_BUFFER_STUFFING_FRAMES;
+        if (mSurfaceFlingerBufferStuffingFrames.incrementAndGet() >= threshold) {
             // The frame was presented one vsync later than expected, so the app is now producing
             // buffers a vsync ahead of SurfaceFlinger for the rest of the animation. Arm the same
             // recovery the blocked-dequeue path uses so the animation timeline is delayed by one
             // frame.
             mSurfaceFlingerBufferStuffingFrames.set(0);
             mBufferStuffingState.isStuffed.set(true);
+            Trace.instant(Trace.TRACE_TAG_VIEW, "buffer stuffed (SurfaceFlinger verdict)");
         }
     }
 
@@ -1078,6 +1123,18 @@ public final class Choreographer {
                             + android.os.Process.myTid() + ", recover frame", 0);
                 }
                 return BufferStuffingState.RecoveryAction.DELAY_FRAME;
+            } else if (mBufferStuffingState.isStuffed.getAndSet(false)
+                    && mBufferStuffingState.extraFrameDelays < MAX_EXTRA_FRAME_DELAYS) {
+                // A queue that is two frames deep needs more than one delayed frame to drain, so
+                // delay again when the pipeline is still reported stuffed after the previous
+                // delay. The cap keeps the cost at no more than MAX_EXTRA_FRAME_DELAYS + 1 dropped
+                // frames per animation, unlike the flagged-off multi-recovery path which is
+                // unbounded up to 100 ms. isStuffed can also be set here by onWaitForBufferRelease;
+                // the same cap applies.
+                mBufferStuffingState.extraFrameDelays++;
+                Trace.instant(Trace.TRACE_TAG_VIEW,
+                        "buffer stuffed again - delaying another frame");
+                return BufferStuffingState.RecoveryAction.DELAY_FRAME;
             }
         }
 
@@ -1102,6 +1159,7 @@ public final class Choreographer {
                         Trace.TRACE_TAG_VIEW, "Buffer stuffing recovery", 0);
             }
             mBufferStuffingState.reset();
+            mStuffingVerdictsIgnoredUpToVsyncId = -1;
             return BufferStuffingState.RecoveryAction.NONE;
         }
 
@@ -1142,6 +1200,10 @@ public final class Choreographer {
                 // Intentional frame delay to help reduce queued buffer count.
                 mBufferStuffingState.numberWaitsForNextVsync++;
                 mBufferStuffingState.accumulatedDelayNanos += frameIntervalNanos;
+                // Verdicts for frames produced before this delay can't show whether the queue
+                // drained, so ignore them until after this frame's vsync id.
+                mStuffingVerdictsIgnoredUpToVsyncId =
+                        vsyncEventData.preferredFrameTimeline().vsyncId;
                 scheduleVsyncLocked();
                 return;
             default:
